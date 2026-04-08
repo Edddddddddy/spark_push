@@ -1,0 +1,11 @@
+.git
+.gitignore
+build
+logs
+deploy/.env.prod
+deploy/.env.local
+deploy/data
+third_party
+load_test
+docs
+*.log

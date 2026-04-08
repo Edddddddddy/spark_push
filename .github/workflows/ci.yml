@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: sparkpushci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare CI env
+        shell: bash
+        run: |
+          cp deploy/.env.example deploy/.env.ci
+          sed -i 's/^APP_IMAGE_REPOSITORY=.*/APP_IMAGE_REPOSITORY=spark-push-app/' deploy/.env.ci
+          sed -i 's/^APP_IMAGE_TAG=.*/APP_IMAGE_TAG=ci/' deploy/.env.ci
+          sed -i 's/^PUBLIC_HTTP_PORT=.*/PUBLIC_HTTP_PORT=18080/' deploy/.env.ci
+
+      - name: Validate compose
+        shell: bash
+        run: |
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.prod.yml config >/dev/null
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.release.yml config >/dev/null
+
+      - name: Build application image
+        shell: bash
+        run: |
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.prod.yml build logic
+
+      - name: Start stack
+        shell: bash
+        run: |
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.prod.yml up -d
+
+      - name: Wait for health
+        shell: bash
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null; then
+              break
+            fi
+            sleep 5
+          done
+
+          curl -fsS http://127.0.0.1:18080/health
+          curl -fsSI http://127.0.0.1:18080/index.html
+
+      - name: Dump logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.prod.yml ps
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.prod.yml logs --no-color
+
+      - name: Stop stack
+        if: always()
+        shell: bash
+        run: |
+          docker compose --env-file deploy/.env.ci -f deploy/docker-compose.prod.yml down -v --remove-orphans
+

@@ -1,0 +1,17 @@
+build/
+logs/
+out/
+cmake-build-*/
+
+.DS_Store
+.idea/
+.vscode/
+*.user
+*.suo
+*.swp
+*.tmp
+
+deploy/.env.prod
+deploy/.env.ci
+deploy/.env.local
+

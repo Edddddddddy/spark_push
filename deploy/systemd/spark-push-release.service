@@ -1,0 +1,17 @@
+[Unit]
+Description=Spark Push release stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/spark-push
+ExecStart=/usr/bin/docker compose --env-file deploy/.env.prod -f deploy/docker-compose.release.yml up -d
+ExecStop=/usr/bin/docker compose --env-file deploy/.env.prod -f deploy/docker-compose.release.yml down
+ExecReload=/bin/bash -lc '/usr/bin/docker compose --env-file deploy/.env.prod -f deploy/docker-compose.release.yml pull && /usr/bin/docker compose --env-file deploy/.env.prod -f deploy/docker-compose.release.yml up -d'
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
