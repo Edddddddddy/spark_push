@@ -55,6 +55,8 @@ class HttpApiServer {
   // 会话 / 房间列表
   void handleSingleSessionList(const muduo::net::HttpRequest& req,
                                muduo::net::HttpResponse* resp);
+  void handleUserSearch(const muduo::net::HttpRequest& req,
+                        muduo::net::HttpResponse* resp);
   void handleChatroomList(const muduo::net::HttpRequest& req,
                           muduo::net::HttpResponse* resp);
 

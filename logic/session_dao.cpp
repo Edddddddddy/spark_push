@@ -399,7 +399,8 @@ bool SessionDao::ListUserSingleSessions(int64_t user_id,
       "FROM `session` WHERE type=0 AND user1_id=? "
       "UNION "
       "SELECT session_id, type, user1_id, user2_id, group_id, last_msg_seq "
-      "FROM `session` WHERE type=0 AND user2_id=?";
+      "FROM `session` WHERE type=0 AND user2_id=? "
+      "ORDER BY last_msg_seq DESC";
   MYSQL_STMT* stmt = mysql_stmt_init(conn);
   if (!stmt) {
     if (err_msg) *err_msg = "mysql_stmt_init failed";

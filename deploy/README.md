@@ -142,3 +142,61 @@ chmod +x deploy/scripts/deploy_remote.sh
 - MySQL 与 Kafka 独立到托管服务
 - 多 Comet 节点横向扩容
 - CI/CD 自动构建镜像并发布
+
+## 9. HTTPS（当前已支持）
+
+推荐把证书放在仓库外的运行时目录，避免后续代码同步把证书覆盖掉：
+
+```bash
+mkdir -p /opt/spark-push/.runtime/nginx-certs
+bash deploy/scripts/generate_self_signed_cert.sh /opt/spark-push/.runtime/nginx-certs 47.250.130.135
+```
+
+然后在 `deploy/.env.prod` 里至少配置：
+
+```bash
+ENABLE_TLS=true
+PUBLIC_HTTPS_PORT=443
+TLS_CERT_HOST_DIR=/opt/spark-push/.runtime/nginx-certs
+TLS_CERT_FILE=/etc/nginx/certs/fullchain.pem
+TLS_KEY_FILE=/etc/nginx/certs/privkey.pem
+```
+
+重启：
+
+```bash
+docker compose --env-file deploy/.env.prod -f deploy/docker-compose.prod.yml up -d --build
+```
+
+验证：
+
+```bash
+curl -k https://47.250.130.135/health
+```
+
+## 10. etcd 服务发现（当前已支持）
+
+当前实现已经支持：
+
+- `logic` 启动后注册到 etcd
+- `comet` 启动后注册到 etcd
+- `comet` 优先从 etcd 发现 `logic`
+- `job` 优先从 etcd 发现所有 `comet`
+- 如果 etcd 暂时不可用，仍会回退到静态配置
+
+`deploy/.env.prod` 里需要的关键配置：
+
+```bash
+ENABLE_ETCD=true
+ETCD_ENDPOINTS=http://etcd:2379
+ETCD_PREFIX=/sparkpush/services
+ETCD_LEASE_TTL=15
+LOGIC_ADVERTISE_ADDR=logic:9100
+COMET_ADVERTISE_ADDR=comet:9205
+```
+
+验证：
+
+```bash
+docker exec spark-push-logic curl -fsS http://etcd:2379/v2/keys/sparkpush/services?recursive=true
+```

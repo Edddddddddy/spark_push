@@ -61,6 +61,12 @@ struct Config {
 
   // Logic HTTP 服务器 IO 线程数（0=单线程，N=N个工作线程）
   int http_threads{4};
+  bool enable_etcd{false};
+  std::string etcd_endpoints;
+  std::string etcd_prefix;
+  int etcd_lease_ttl{15};
+  std::string logic_advertise_addr;
+  std::string comet_advertise_addr;
 };
 
 // 简单 key=value 文本配置加载

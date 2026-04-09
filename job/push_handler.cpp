@@ -1,5 +1,6 @@
 #include "push_handler.h"
 
+#include "etcd_client.h"
 #include "logging.h"
 
 #include <chrono>
@@ -225,6 +226,9 @@ void PushHandler::Stop() {
 
 void PushHandler::ParseCometTargets() {
   comet_addrs_.clear();
+  if (cfg_.enable_etcd && DiscoverCometGrpcTargets(cfg_, &comet_addrs_)) {
+    return;
+  }
   if (cfg_.comet_targets.empty()) return;
   std::stringstream ss(cfg_.comet_targets);
   std::string item;
@@ -247,6 +251,10 @@ CometService::Stub* PushHandler::GetStub(const std::string& comet_id) {
   auto it = comet_stubs_.find(comet_id);
   if (it != comet_stubs_.end()) return it->second.get();
   auto addr_it = comet_addrs_.find(comet_id);
+  if (addr_it == comet_addrs_.end() && cfg_.enable_etcd) {
+    ParseCometTargets();
+    addr_it = comet_addrs_.find(comet_id);
+  }
   if (addr_it == comet_addrs_.end()) return nullptr;
   auto channel = grpc::CreateChannel(addr_it->second,
                                      grpc::InsecureChannelCredentials());

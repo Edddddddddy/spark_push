@@ -4,6 +4,7 @@
 #include "grpc_service.h"
 #include "http_server.h"
 #include "conversation_store.h"
+#include "etcd_client.h"
 #include "session_dao.h"
 #include "message_dao.h"
 #include "user_session_state_dao.h"
@@ -158,6 +159,22 @@ int RunLogic(const Config& cfg) {
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
   LogInfo("Logic gRPC server listening on " + grpc_addr);
 
+  auto etcd_client = CreateEtcdClient(cfg);
+  std::unique_ptr<EtcdServiceRegistrar> registrar;
+  if (etcd_client) {
+    std::string advertise_addr = cfg.logic_advertise_addr;
+    if (advertise_addr.empty()) {
+      advertise_addr = "logic:" + std::to_string(cfg.listen_port);
+    }
+    registrar = std::make_unique<EtcdServiceRegistrar>(
+        etcd_client,
+        "logic",
+        "logic-" + std::to_string(cfg.listen_port),
+        advertise_addr,
+        cfg.etcd_lease_ttl);
+    registrar->Start();
+  }
+
   // 启动 HTTP 服务器（登录 / 发送消息）
   muduo::net::EventLoop loop;
   // HTTP 监听端口从配置中读取（http_port），避免隐式使用 listen_port+1
@@ -201,6 +218,9 @@ int RunLogic(const Config& cfg) {
   }
   if (grpc_thread.joinable()) {
     grpc_thread.join();
+  }
+  if (registrar) {
+    registrar->Stop();
   }
   mysql_pool.Stop();
   LogInfo("Logic shutdown complete");
