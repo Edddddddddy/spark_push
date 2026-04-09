@@ -354,7 +354,7 @@
     <div id="nav-panel" class="hidden">
       <!-- 搜索/新建会话区域 -->
       <div style="padding:10px; border-bottom:1px solid #eee; display:flex; gap:5px;">
-        <input id="to-user" class="form-control" style="padding:6px;" placeholder="输入对方 UserID..." />
+        <input id="to-user" class="form-control" style="padding:6px;" placeholder="输入对方 ID、用户名或账号..." />
         <button id="start-chat-btn" class="btn-primary" style="padding:6px 12px;">私聊</button>
       </div>
       
@@ -424,6 +424,8 @@
     let ws = null;
     let currentUserId = null;
     let token = null;
+    let currentPeerName = '';
+    let sessionListRefreshTimer = null;
     let currentSessionId = null; // 当前选中的会话ID
     let currentPeerId = null;    // 当前聊天的对象ID
     let lastHistorySeq = 0;      // 历史消息最大seq，用于标记已读
@@ -437,15 +439,111 @@
     const logicBase = window.location.origin;
 
     // 构造带 Authorization 的请求头
+    function getActiveToken() {
+      if (token) return token;
+      const saved = Auth.get();
+      return saved && saved.token ? saved.token : '';
+    }
+
     function authHeaders() {
       const h = {'Content-Type': 'application/json'};
-      if (token) h['Authorization'] = 'Bearer ' + token;
+      const activeToken = getActiveToken();
+      if (activeToken) h['Authorization'] = 'Bearer ' + activeToken;
       return h;
     }
 
+    function authJsonBody(payload) {
+      const body = Object.assign({}, payload || {});
+      const activeToken = getActiveToken();
+      if (activeToken && !body.token) {
+        body.token = activeToken;
+      }
+      return JSON.stringify(body);
+    }
+
+    function normalizeSearchKeyword(value) {
+      const raw = String(value == null ? '' : value);
+      const normalized = typeof raw.normalize === 'function' ? raw.normalize('NFKC') : raw;
+      return normalized.trim();
+    }
+
     function normalizeUserId(value) {
-      const n = Number(value);
+      if (typeof value === 'number') {
+        return Number.isInteger(value) && value > 0 ? value : null;
+      }
+
+      const normalized = normalizeSearchKeyword(value);
+      if (!/^\d+$/.test(normalized)) return null;
+
+      const n = Number(normalized);
       return Number.isInteger(n) && n > 0 ? n : null;
+    }
+
+    function getPeerDisplayName(peerId, peerName, peerAccount) {
+      const name = normalizeSearchKeyword(peerName);
+      if (name) return name;
+      const account = normalizeSearchKeyword(peerAccount);
+      if (account) return account;
+      return '用户 ' + peerId;
+    }
+
+    function scheduleSessionListRefresh() {
+      if (sessionListRefreshTimer) {
+        clearTimeout(sessionListRefreshTimer);
+      }
+      sessionListRefreshTimer = setTimeout(() => {
+        sessionListRefreshTimer = null;
+        if (currentUserId) {
+          loadSingleSessionList();
+        }
+      }, 150);
+    }
+
+    async function searchUsers(keyword) {
+      const resp = await fetch(logicBase + '/api/user/search', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: authJsonBody({ keyword })
+      });
+      const data = await resp.json();
+      if (data.code !== 0) {
+        throw new Error(data.message || '用户搜索失败');
+      }
+      return data.data && Array.isArray(data.data.users) ? data.data.users : [];
+    }
+
+    async function resolvePeerUser(query) {
+      const keyword = normalizeSearchKeyword(query);
+      if (!keyword) {
+        throw new Error('请输入对方用户 ID、用户名或账号');
+      }
+
+      const directUserId = normalizeUserId(keyword);
+      if (directUserId !== null) {
+        return { user_id: directUserId, name: '', account: '' };
+      }
+
+      const users = await searchUsers(keyword);
+      if (users.length === 0) {
+        throw new Error('未找到该用户，请检查用户名或账号');
+      }
+      if (users.length === 1) {
+        return users[0];
+      }
+
+      const exactMatch = users.find((user) => {
+        return normalizeSearchKeyword(user.account) === keyword ||
+               normalizeSearchKeyword(user.name) === keyword;
+      });
+      if (exactMatch) {
+        return exactMatch;
+      }
+
+      const tips = users.map((user) => {
+        const displayName = getPeerDisplayName(user.user_id, user.name, user.account);
+        return displayName + ' (ID: ' + user.user_id + (user.account ? ', 账号: ' + user.account : '') + ')';
+      });
+      throw new Error('找到多个匹配用户，请输入更精确的用户名，或直接使用 ID：\n' + tips.join('\n'));
     }
 
     function buildSingleSessionId(u1, u2) {
@@ -487,21 +585,27 @@
       token = null;
       currentSessionId = null;
       currentPeerId = null;
+      currentPeerName = '';
       ws = null;
       document.getElementById('messages').innerHTML = '';
       updateUIState();
     }
 
-    function showChatWindow(peerId, sessionId) {
+    function showChatWindow(peerId, sessionId, peerMeta) {
       const normalizedPeerId = normalizeUserId(peerId);
       const normalizedSessionId = sessionId || buildSingleSessionId(currentUserId, normalizedPeerId);
       if (!normalizedPeerId || !normalizedSessionId) {
-        alert('请输入正确的对方用户 ID');
+        alert('请输入正确的对方用户信息');
         return;
       }
       peerId = normalizedPeerId;
       sessionId = normalizedSessionId;
       currentPeerId = peerId;
+      currentPeerName = getPeerDisplayName(
+        peerId,
+        peerMeta && peerMeta.name,
+        peerMeta && peerMeta.account
+      );
       currentSessionId = sessionId;
       // 重置历史分页状态
       historyAnchorSeq = 0;
@@ -512,9 +616,9 @@
       document.getElementById('empty-state').classList.add('hidden');
       document.getElementById('chat-window').classList.remove('hidden');
       
-      document.getElementById('chat-title').textContent = '与用户 ' + peerId + ' 聊天中';
+      document.getElementById('chat-title').textContent = '与 ' + currentPeerName + ' 聊天中';
       document.getElementById('session-id-disp').textContent = sessionId;
-      document.getElementById('chat-title').textContent = '与用户 ' + peerId + ' 聊天中';
+      document.getElementById('chat-title').textContent = '与 ' + currentPeerName + ' 聊天中';
       
       // 清空当前消息框并加载历史（首次）
       document.getElementById('messages').innerHTML = '';
@@ -667,6 +771,7 @@
              const senderId = normalizeUserId(obj.sender_id || obj.from_user_id);
              const targetUserId = normalizeUserId(obj.to_user_id || currentUserId);
              const messageSessionId = buildSingleSessionId(senderId, targetUserId);
+             scheduleSessionListRefresh();
              if (!currentSessionId || !messageSessionId || messageSessionId !== currentSessionId) {
                return;
              }
@@ -755,7 +860,7 @@
         const resp = await fetch(logicBase + '/api/session/list_single', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({})
+          body: authJsonBody({})
         });
         const data = await resp.json();
         if (data.code === 0) {
@@ -782,15 +887,22 @@
         if (s.session_id === currentSessionId) div.classList.add('active');
         div.dataset.sid = s.session_id;
         
+        const displayName = getPeerDisplayName(peerUserId, s.peer_name, s.peer_account);
+        const preview = s.last_msg_seq > 0
+          ? '最新消息序号: ' + s.last_msg_seq
+          : ('会话 ID: ' + s.session_id);
         div.innerHTML = `
           <div class="avatar-placeholder" style="background:#90caf9;">${peerUserId}</div>
           <div class="session-info">
-             <div class="session-name">用户 ${s.peer_user_id}</div>
-             <div class="session-preview">会话 ID: ${s.session_id}</div>
+             <div class="session-name">${displayName}</div>
+             <div class="session-preview">${preview}</div>
           </div>
         `;
         div.onclick = () => {
-          showChatWindow(peerUserId, s.session_id);
+          showChatWindow(peerUserId, s.session_id, {
+            name: s.peer_name,
+            account: s.peer_account
+          });
         };
         container.appendChild(div);
       });
@@ -820,7 +932,7 @@
          const resp = await fetch(logicBase + '/api/session/history', {
            method: 'POST',
            headers: authHeaders(),
-           body: JSON.stringify({
+           body: authJsonBody({
              session_id: currentSessionId,
              anchor_seq: anchor,
              limit: pageSize
@@ -912,6 +1024,7 @@
        
        // 乐观更新 UI
        appendMsgRow(text, true, currentUserId);
+       scheduleSessionListRefresh();
        document.getElementById('msg-text').value = '';
     }
 
@@ -999,15 +1112,27 @@
        }
     };
 
-    document.getElementById('start-chat-btn').onclick = () => {
-       const peer = normalizeUserId(document.getElementById('to-user').value.trim());
-       if (peer === null) return alert('请输入正确的对方用户 ID');
-       if(!peer) return alert('请输入对方ID');
+    document.getElementById('start-chat-btn').onclick = async () => {
        if(!currentUserId) return alert('请先登录');
-       const sid = buildSingleSessionId(currentUserId, peer);
-       showChatWindow(peer, sid);
+       try {
+         const peerUser = await resolvePeerUser(toUserInput.value);
+         const peer = normalizeUserId(peerUser.user_id);
+         if (peer === null) return alert('请输入正确的对方用户信息');
+         if (peer === currentUserId) return alert('不能给自己发起私聊');
+         const sid = buildSingleSessionId(currentUserId, peer);
+         showChatWindow(peer, sid, peerUser);
+       } catch (e) {
+         alert(e.message || String(e));
+       }
     };
     
+    const toUserInput = document.getElementById('to-user');
+    toUserInput.addEventListener('keydown', (e) => {
+       if (e.key === 'Enter') {
+         document.getElementById('start-chat-btn').click();
+       }
+    });
+
     document.getElementById('refresh-sessions-btn').onclick = loadSingleSessionList;
     document.getElementById('send-btn').onclick = sendMsg;
     document.getElementById('msg-text').onkeydown = (e) => { if(e.key==='Enter') sendMsg(); };

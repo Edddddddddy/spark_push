@@ -356,6 +356,135 @@ bool UserDao::GetUserById(int64_t user_id,
   return true;
 }
 
+bool UserDao::FindUsersByKeyword(const std::string& keyword,
+                                 std::vector<User>* users,
+                                 std::string* err_msg) {
+  if (!users || !pool_) {
+    if (err_msg) *err_msg = "invalid arguments";
+    return false;
+  }
+  users->clear();
+  if (keyword.empty()) {
+    return true;
+  }
+
+  auto guard = pool_->Acquire();
+  MYSQL* conn = guard.get();
+  if (!conn) {
+    if (err_msg) *err_msg = "no mysql connection";
+    return false;
+  }
+
+  const char* sql =
+      "SELECT id, account, name FROM user "
+      "WHERE account = ? OR name = ? OR account LIKE CONCAT('%', ?, '%') "
+      "OR name LIKE CONCAT('%', ?, '%') "
+      "ORDER BY (account = ?) DESC, (name = ?) DESC, id ASC LIMIT 10";
+
+  MYSQL_STMT* stmt = mysql_stmt_init(conn);
+  if (!stmt) {
+    std::string e = "mysql_stmt_init failed";
+    LogError(e);
+    if (err_msg) *err_msg = e;
+    return false;
+  }
+
+  if (mysql_stmt_prepare(stmt, sql, static_cast<unsigned long>(strlen(sql))) !=
+      0) {
+    std::string e = mysql_stmt_error(stmt);
+    LogError("FindUsersByKeyword prepare failed: " + e);
+    if (err_msg) *err_msg = e;
+    mysql_stmt_close(stmt);
+    return false;
+  }
+
+  MYSQL_BIND param[6];
+  memset(param, 0, sizeof(param));
+  unsigned long keyword_len = static_cast<unsigned long>(keyword.size());
+  for (auto& p : param) {
+    p.buffer_type = MYSQL_TYPE_STRING;
+    p.buffer = const_cast<char*>(keyword.data());
+    p.buffer_length = keyword_len;
+    p.length = &keyword_len;
+  }
+
+  if (mysql_stmt_bind_param(stmt, param) != 0) {
+    std::string e = mysql_stmt_error(stmt);
+    LogError("FindUsersByKeyword bind_param failed: " + e);
+    if (err_msg) *err_msg = e;
+    mysql_stmt_close(stmt);
+    return false;
+  }
+
+  if (mysql_stmt_execute(stmt) != 0) {
+    std::string e = mysql_stmt_error(stmt);
+    LogError("FindUsersByKeyword execute failed: " + e);
+    if (err_msg) *err_msg = e;
+    mysql_stmt_close(stmt);
+    return false;
+  }
+
+  if (mysql_stmt_store_result(stmt) != 0) {
+    std::string e = mysql_stmt_error(stmt);
+    LogError("FindUsersByKeyword store_result failed: " + e);
+    if (err_msg) *err_msg = e;
+    mysql_stmt_close(stmt);
+    return false;
+  }
+
+  MYSQL_BIND result[3];
+  memset(result, 0, sizeof(result));
+
+  long long id_buf = 0;
+  char account_buf[128] = {0};
+  char name_buf[128] = {0};
+  unsigned long account_len = 0;
+  unsigned long name_len = 0;
+
+  result[0].buffer_type = MYSQL_TYPE_LONGLONG;
+  result[0].buffer = &id_buf;
+  result[0].is_unsigned = 0;
+
+  result[1].buffer_type = MYSQL_TYPE_STRING;
+  result[1].buffer = account_buf;
+  result[1].buffer_length = sizeof(account_buf);
+  result[1].length = &account_len;
+
+  result[2].buffer_type = MYSQL_TYPE_STRING;
+  result[2].buffer = name_buf;
+  result[2].buffer_length = sizeof(name_buf);
+  result[2].length = &name_len;
+
+  if (mysql_stmt_bind_result(stmt, result) != 0) {
+    std::string e = mysql_stmt_error(stmt);
+    LogError("FindUsersByKeyword bind_result failed: " + e);
+    if (err_msg) *err_msg = e;
+    mysql_stmt_close(stmt);
+    return false;
+  }
+
+  while (true) {
+    int fetch_ret = mysql_stmt_fetch(stmt);
+    if (fetch_ret == MYSQL_NO_DATA) break;
+    if (fetch_ret != 0 && fetch_ret != MYSQL_DATA_TRUNCATED) {
+      std::string e = mysql_stmt_error(stmt);
+      LogError("FindUsersByKeyword fetch failed: " + e);
+      if (err_msg) *err_msg = e;
+      mysql_stmt_close(stmt);
+      return false;
+    }
+
+    User user;
+    user.id = id_buf;
+    user.account.assign(account_buf, account_len);
+    user.name.assign(name_buf, name_len);
+    users->push_back(std::move(user));
+  }
+
+  mysql_stmt_close(stmt);
+  return true;
+}
+
 }  // namespace sparkpush
 
 

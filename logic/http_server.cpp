@@ -45,6 +45,13 @@ std::unordered_map<std::string, std::string> ParseForm(const std::string& body) 
   return result;
 }
 
+std::string Trim(std::string value) {
+  const auto begin = value.find_first_not_of(" \t\r\n");
+  if (begin == std::string::npos) return "";
+  const auto end = value.find_last_not_of(" \t\r\n");
+  return value.substr(begin, end - begin + 1);
+}
+
 // 通用 JSON 解析工具
 bool ParseJsonBody(const std::string& body, nlohmann::json* out) {
   if (!out) return false;
@@ -232,6 +239,7 @@ void HttpApiServer::onRequest(const HttpRequest& req, HttpResponse* resp) {
       {"/api/danmaku/send", &HttpApiServer::handleDanmakuSend},
       {"/api/danmaku/list", &HttpApiServer::handleDanmakuList},
       {"/api/session/list_single", &HttpApiServer::handleSingleSessionList},
+      {"/api/user/search", &HttpApiServer::handleUserSearch},
       {"/api/chatroom/list", &HttpApiServer::handleChatroomList},
       {"/api/admin/chatroom/create", &HttpApiServer::handleAdminCreateChatroom},
       {"/api/admin/chatroom/list", &HttpApiServer::handleAdminListChatroom},
@@ -1106,12 +1114,95 @@ void HttpApiServer::handleSingleSessionList(const HttpRequest& req,
   for (const auto& s : sessions) {
     int64_t peer_id = (s.user1_id == user_id) ? s.user2_id : s.user1_id;
     if (peer_id <= 0) continue;
+
+    User peer_user;
+    bool has_peer_user = false;
+    if (user_dao_) {
+      std::string ignored_err;
+      has_peer_user = user_dao_->GetUserById(peer_id, &peer_user, &ignored_err);
+    }
+
     if (!first) data << ",";
     first = false;
     data << "{"
          << "\"session_id\":\"" << s.id << "\","
          << "\"peer_user_id\":" << peer_id << ","
+         << "\"peer_name\":\""
+         << (has_peer_user ? peer_user.name : "") << "\","
+         << "\"peer_account\":\""
+         << (has_peer_user ? peer_user.account : "") << "\","
          << "\"last_msg_seq\":" << s.last_msg_seq
+         << "}";
+  }
+  data << "]}";
+  WriteJson(resp, 0, "ok", data.str());
+}
+
+void HttpApiServer::handleUserSearch(const HttpRequest& req,
+                                     HttpResponse* resp) {
+  if (req.method() != HttpRequest::kPost) {
+    WriteJson(resp,
+              405,
+              "only POST allowed",
+              "{}",
+              HttpResponse::k400BadRequest);
+    return;
+  }
+
+  int64_t auth_user_id = AuthenticateRequest(req, resp);
+  if (auth_user_id <= 0) return;
+
+  if (!user_dao_) {
+    WriteJson(resp, 500, "user dao not initialized");
+    return;
+  }
+
+  nlohmann::json j;
+  if (!ParseJsonBody(req.body(), &j)) {
+    WriteJson(resp, 400, "invalid json body", "{}",
+              HttpResponse::k400BadRequest);
+    return;
+  }
+
+  std::string keyword;
+  try {
+    if (!j.contains("keyword")) {
+      WriteJson(resp, 400, "keyword required", "{}",
+                HttpResponse::k400BadRequest);
+      return;
+    }
+    keyword = j.at("keyword").get<std::string>();
+  } catch (...) {
+    WriteJson(resp, 400, "invalid keyword", "{}",
+              HttpResponse::k400BadRequest);
+    return;
+  }
+
+  keyword = Trim(keyword);
+  if (keyword.empty()) {
+    WriteJson(resp, 400, "keyword required", "{}",
+              HttpResponse::k400BadRequest);
+    return;
+  }
+
+  std::vector<User> users;
+  std::string err;
+  if (!user_dao_->FindUsersByKeyword(keyword, &users, &err)) {
+    WriteJson(resp, 500, "search user failed: " + err);
+    return;
+  }
+
+  std::ostringstream data;
+  data << "{\"users\":[";
+  bool first = true;
+  for (const auto& user : users) {
+    if (user.id <= 0 || user.id == auth_user_id) continue;
+    if (!first) data << ",";
+    first = false;
+    data << "{"
+         << "\"user_id\":" << user.id << ","
+         << "\"account\":\"" << user.account << "\","
+         << "\"name\":\"" << user.name << "\""
          << "}";
   }
   data << "]}";

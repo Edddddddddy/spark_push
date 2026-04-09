@@ -66,6 +66,33 @@ services:
     networks:
       - backend
 
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: spark-push-etcd
+    restart: unless-stopped
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --enable-v2=true
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/etcdctl
+        - --endpoints=http://127.0.0.1:2379
+        - endpoint
+        - health
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - backend
+
   kafka:
     image: apache/kafka:3.8.0
     container_name: spark-push-kafka
@@ -139,6 +166,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      etcd:
+        condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
     environment:
@@ -155,6 +184,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
       REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-16}
+      ENABLE_ETCD: ${ENABLE_ETCD:-true}
+      ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-http://etcd:2379}
+      ETCD_PREFIX: ${ETCD_PREFIX:-/sparkpush/services}
+      ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-15}
+      LOGIC_ADVERTISE_ADDR: ${LOGIC_ADVERTISE_ADDR:-logic:${LOGIC_GRPC_PORT:-9100}}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: ${MYSQL_USER:-spark_push}
@@ -185,13 +219,20 @@ services:
     depends_on:
       logic:
         condition: service_healthy
+      etcd:
+        condition: service_healthy
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       SPARK_SERVICE: comet
       LOGIC_GRPC_TARGET: logic:${LOGIC_GRPC_PORT:-9100}
+      ENABLE_ETCD: ${ENABLE_ETCD:-true}
+      ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-http://etcd:2379}
+      ETCD_PREFIX: ${ETCD_PREFIX:-/sparkpush/services}
+      ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-15}
       COMET_ID: ${COMET_ID:-comet-1}
       COMET_WS_PORT: ${COMET_WS_PORT:-9200}
       COMET_GRPC_PORT: ${COMET_GRPC_PORT:-9205}
+      COMET_ADVERTISE_ADDR: ${COMET_ADVERTISE_ADDR:-comet:${COMET_GRPC_PORT:-9205}}
       COMET_IO_THREADS: ${COMET_IO_THREADS:-8}
       COMET_GRPC_POOL_SIZE: ${COMET_GRPC_POOL_SIZE:-4}
       USE_GRPC_STREAM: ${USE_GRPC_STREAM:-true}
@@ -220,6 +261,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      etcd:
+        condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
       comet:
@@ -232,6 +275,10 @@ services:
       KAFKA_PUSH_TOPIC: ${KAFKA_PUSH_TOPIC:-push_to_comet}
       KAFKA_BROADCAST_TOPIC: ${KAFKA_BROADCAST_TOPIC:-broadcast_task}
       COMET_TARGETS: ${COMET_ID:-comet-1}=comet:${COMET_GRPC_PORT:-9205}
+      ENABLE_ETCD: ${ENABLE_ETCD:-true}
+      ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-http://etcd:2379}
+      ETCD_PREFIX: ${ETCD_PREFIX:-/sparkpush/services}
+      ETCD_LEASE_TTL: ${ETCD_LEASE_TTL:-15}
       USE_PUSH_STREAM: ${USE_PUSH_STREAM:-false}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -284,6 +331,12 @@ services:
     image: nginx:1.27-alpine
     container_name: spark-push-nginx
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        sh /docker-entrypoint.d/40-render-config.sh
+        exec nginx -g 'daemon off;'
     depends_on:
       logic:
         condition: service_healthy
@@ -293,8 +346,17 @@ services:
         condition: service_healthy
     ports:
       - "${PUBLIC_HTTP_PORT:-80}:80"
+      - "${PUBLIC_HTTPS_PORT:-443}:443"
+    environment:
+      ENABLE_TLS: ${ENABLE_TLS:-false}
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-/etc/nginx/certs/fullchain.pem}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-/etc/nginx/certs/privkey.pem}
+      LOGIC_HTTP_PORT: ${LOGIC_HTTP_PORT:-9101}
+      COMET_WS_PORT: ${COMET_WS_PORT:-9200}
+      WEB_DEMO_PORT: ${WEB_DEMO_PORT:-9001}
     volumes:
-      - ./nginx/spark-push.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/40-render-config.sh:/docker-entrypoint.d/40-render-config.sh:ro
+      - ${TLS_CERT_HOST_DIR:-./nginx/certs}:/etc/nginx/certs:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -314,6 +376,7 @@ volumes:
   mysql-data:
   redis-data:
   kafka-data:
+  etcd-data:
   logic-logs:
   comet-logs:
   job-logs:

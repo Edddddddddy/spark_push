@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     cmake \
     curl \
+    libcurl4-openssl-dev \
     default-libmysqlclient-dev \
     libc-ares-dev \
     libgrpc++-dev \
@@ -37,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
+    libcurl4 \
     default-libmysqlclient-dev \
     libc-ares-dev \
     libgrpc++-dev \
