@@ -3,6 +3,8 @@
 #include "model.h"
 #include "mysql_pool.h"
 
+#include <vector>
+
 namespace sparkpush {
 
 // 简单用户 DAO：目前只操作单库，后续可在这里加入分库分表路由
@@ -23,6 +25,10 @@ class UserDao {
   bool GetUserById(int64_t user_id,
                    User* user,
                    std::string* err_msg);
+
+  bool FindUsersByKeyword(const std::string& keyword,
+                          std::vector<User>* users,
+                          std::string* err_msg);
 
  private:
   MySqlConnectionPool* pool_;
