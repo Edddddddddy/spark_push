@@ -59,6 +59,16 @@ Configure these in the `production` environment.
 - `PROD_SSH_PRIVATE_KEY`
 - `GHCR_PULL_TOKEN`
 
+`PROD_SSH_PRIVATE_KEY` must be the full private key content used by GitHub Actions to log in to the server. It is not the public key that you added to GitHub.
+
+If you follow the current deployment setup from this project, the dedicated deploy key is:
+
+```text
+C:\Users\lcy\.ssh\github_actions_deploy_ed25519
+```
+
+Its public key has already been installed on the production server for user `eddy`.
+
 `GHCR_PULL_TOKEN` should be a GitHub Personal Access Token with at least `read:packages`.
 
 ## Workflow Design
