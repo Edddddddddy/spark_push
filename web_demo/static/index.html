@@ -442,6 +442,19 @@
       if (token) h['Authorization'] = 'Bearer ' + token;
       return h;
     }
+
+    function normalizeUserId(value) {
+      const n = Number(value);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+
+    function buildSingleSessionId(u1, u2) {
+       const a = normalizeUserId(u1);
+       const b = normalizeUserId(u2);
+       if (!a || !b) return null;
+       return 'single:' + Math.min(a, b) + ':' + Math.max(a, b);
+    }
+
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const cometWsUrl = wsProtocol + '//' + window.location.host + '/ws';
 
@@ -480,6 +493,14 @@
     }
 
     function showChatWindow(peerId, sessionId) {
+      const normalizedPeerId = normalizeUserId(peerId);
+      const normalizedSessionId = sessionId || buildSingleSessionId(currentUserId, normalizedPeerId);
+      if (!normalizedPeerId || !normalizedSessionId) {
+        alert('请输入正确的对方用户 ID');
+        return;
+      }
+      peerId = normalizedPeerId;
+      sessionId = normalizedSessionId;
       currentPeerId = peerId;
       currentSessionId = sessionId;
       // 重置历史分页状态
@@ -493,6 +514,7 @@
       
       document.getElementById('chat-title').textContent = '与用户 ' + peerId + ' 聊天中';
       document.getElementById('session-id-disp').textContent = sessionId;
+      document.getElementById('chat-title').textContent = '与用户 ' + peerId + ' 聊天中';
       
       // 清空当前消息框并加载历史（首次）
       document.getElementById('messages').innerHTML = '';
@@ -606,7 +628,7 @@
         }
         
         // 成功
-        currentUserId = data.data.user_id;
+        currentUserId = Number(data.data.user_id);
         token = data.data.token;
         // 缓存本地
         Auth.set(currentUserId, token, body.name || ('User ' + currentUserId));
@@ -642,6 +664,13 @@
           if (obj.type === 'ack') {
             // console.log('Ack:', obj.msg_id);
           } else if (obj.type === 'single_chat') {
+             const senderId = normalizeUserId(obj.sender_id || obj.from_user_id);
+             const targetUserId = normalizeUserId(obj.to_user_id || currentUserId);
+             const messageSessionId = buildSingleSessionId(senderId, targetUserId);
+             if (!currentSessionId || !messageSessionId || messageSessionId !== currentSessionId) {
+               return;
+             }
+             const isMe = senderId === currentUserId;
              // 收到单聊消息
              // const sender = obj.sender_id; // 假设后端下发 sender_id
              
@@ -653,6 +682,11 @@
              } else if (obj.from_user_id) {
                 senderDisplayName = 'User ' + obj.from_user_id;
              }
+             if (isMe) {
+                senderDisplayName = 'User ' + currentUserId;
+             } else if (senderId) {
+                senderDisplayName = 'User ' + senderId;
+             }
 
              const t = getMsgText(obj);
              console.log('obj', obj);
@@ -663,6 +697,13 @@
              if(obj.client_msg_id && /^\d+$/.test(obj.client_msg_id)) {
                 timeStr = new Date(parseInt(obj.client_msg_id)).toLocaleTimeString();
              }
+             if (obj.create_time) {
+                timeStr = new Date(obj.create_time).toLocaleTimeString();
+             } else if (obj.timestamp_ms) {
+                timeStr = new Date(obj.timestamp_ms).toLocaleTimeString();
+             }
+             appendMsgRow(t, isMe, senderDisplayName, timeStr);
+             return;
 
              // 判断是否属于当前打开的会话
              // 简单处理：如果是发给我的，且发送者是当前 peer，直接显示
@@ -673,6 +714,8 @@
              // 这里 Spark Push 的逻辑可能是推回给自己的
              
              appendMsgRow(t, false, senderDisplayName, timeStr); // 默认为对方发
+          } else if (obj.type === 'error') {
+             appendSystemMsg('发送失败: ' + (obj.message || 'unknown error'));
           } else if (obj.type === 'system_broadcast') {
              // 处理系统广播
              // scope: "all" 为全局推送；scope: "group" 为房间/群推送
@@ -732,20 +775,22 @@
       }
       
       list.forEach(s => {
+        const peerUserId = normalizeUserId(s.peer_user_id);
+        if (!peerUserId || !s.session_id) return;
         const div = document.createElement('div');
         div.className = 'session-item';
         if (s.session_id === currentSessionId) div.classList.add('active');
         div.dataset.sid = s.session_id;
         
         div.innerHTML = `
-          <div class="avatar-placeholder" style="background:#90caf9;">${s.peer_user_id}</div>
+          <div class="avatar-placeholder" style="background:#90caf9;">${peerUserId}</div>
           <div class="session-info">
              <div class="session-name">用户 ${s.peer_user_id}</div>
              <div class="session-preview">会话 ID: ${s.session_id}</div>
           </div>
         `;
         div.onclick = () => {
-          showChatWindow(s.peer_user_id, s.session_id);
+          showChatWindow(peerUserId, s.session_id);
         };
         container.appendChild(div);
       });
@@ -753,9 +798,10 @@
     
     // 4. 开启新会话 (build ID)
     function buildSingleSessionId(u1, u2) {
-       const a = Number(u1); const b = Number(u2);
-       if(!a || !b) return null;
-       return 's_' + Math.min(a,b) + '_' + Math.max(a,b);
+       const a = normalizeUserId(u1);
+       const b = normalizeUserId(u2);
+       if (!a || !b) return null;
+       return 'single:' + Math.min(a, b) + ':' + Math.max(a, b);
     }
     
     // 5. 历史记录（支持分页 / 滚动加载）
@@ -844,7 +890,12 @@
     // 6. 发送消息
     function sendMsg() {
        const text = document.getElementById('msg-text').value.trim();
-       if (!text || !currentPeerId) return;
+       const targetUserId = normalizeUserId(currentPeerId);
+       if (!text) return;
+       if (!targetUserId) {
+         appendSystemMsg('请选择正确的单聊对象后再发送');
+         return;
+       }
        
        if (!ws || ws.readyState !== WebSocket.OPEN) {
          appendSystemMsg('WebSocket 未连接，无法发送');
@@ -853,7 +904,7 @@
        
        const payload = {
          type: 'single_chat',
-         to_user_id: Number(currentPeerId),
+         to_user_id: targetUserId,
          client_msg_id: Date.now().toString(),
          content: { text }
        };
@@ -949,7 +1000,8 @@
     };
 
     document.getElementById('start-chat-btn').onclick = () => {
-       const peer = document.getElementById('to-user').value.trim();
+       const peer = normalizeUserId(document.getElementById('to-user').value.trim());
+       if (peer === null) return alert('请输入正确的对方用户 ID');
        if(!peer) return alert('请输入对方ID');
        if(!currentUserId) return alert('请先登录');
        const sid = buildSingleSessionId(currentUserId, peer);
