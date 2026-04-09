@@ -71,6 +71,8 @@ Its public key has already been installed on the production server for user `edd
 
 `GHCR_PULL_TOKEN` should be a GitHub Personal Access Token with at least `read:packages`.
 
+If this token is not configured yet, the current CD workflow will automatically fall back to server-side source build instead of failing the deployment.
+
 ## Workflow Design
 
 ### CI
