@@ -100,12 +100,18 @@ jobs:
       - name: Deploy on server
         shell: bash
         run: |
-          ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
-            cd '${{ vars.DEPLOY_PATH }}' && \
-            chmod +x deploy/scripts/release_server.sh deploy/scripts/deploy_remote.sh && \
-            APP_IMAGE_REPOSITORY='${{ needs.build-and-push.outputs.image_repository }}' \
-            APP_IMAGE_TAG='${{ needs.build-and-push.outputs.image_tag }}' \
-            GHCR_USERNAME='${{ vars.GHCR_PULL_USERNAME }}' \
-            GHCR_TOKEN='${{ secrets.GHCR_PULL_TOKEN }}' \
-            bash deploy/scripts/release_server.sh || \
-            docker compose --env-file deploy/.env.prod -f deploy/docker-compose.prod.yml up -d --build"
+          if [ -n "${{ secrets.GHCR_PULL_TOKEN }}" ]; then
+            ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
+              cd '${{ vars.DEPLOY_PATH }}' && \
+              chmod +x deploy/scripts/release_server.sh deploy/scripts/deploy_remote.sh && \
+              APP_IMAGE_REPOSITORY='${{ needs.build-and-push.outputs.image_repository }}' \
+              APP_IMAGE_TAG='${{ needs.build-and-push.outputs.image_tag }}' \
+              GHCR_USERNAME='${{ vars.GHCR_PULL_USERNAME }}' \
+              GHCR_TOKEN='${{ secrets.GHCR_PULL_TOKEN }}' \
+              bash deploy/scripts/release_server.sh || \
+              docker compose --env-file deploy/.env.prod -f deploy/docker-compose.prod.yml up -d --build"
+          else
+            ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
+              cd '${{ vars.DEPLOY_PATH }}' && \
+              docker compose --env-file deploy/.env.prod -f deploy/docker-compose.prod.yml up -d --build"
+          fi
