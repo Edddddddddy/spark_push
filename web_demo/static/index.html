@@ -444,8 +444,27 @@
     }
 
     function normalizeUserId(value) {
-      const n = Number(value);
+      if (typeof value === 'number') {
+        return Number.isInteger(value) && value > 0 ? value : null;
+      }
+
+      const raw = String(value == null ? '' : value).trim();
+      if (!raw) return null;
+
+      const normalized = typeof raw.normalize === 'function' ? raw.normalize('NFKC') : raw;
+      if (/[-－]\s*\d/.test(normalized)) return null;
+
+      const digits = normalized.replace(/[^\d]/g, '');
+      if (!digits) return null;
+
+      const n = Number(digits);
       return Number.isInteger(n) && n > 0 ? n : null;
+    }
+
+    function sanitizeUserIdInputValue(value) {
+      const raw = String(value == null ? '' : value);
+      const normalized = typeof raw.normalize === 'function' ? raw.normalize('NFKC') : raw;
+      return normalized.replace(/[^\d]/g, '');
     }
 
     function buildSingleSessionId(u1, u2) {
@@ -1000,14 +1019,30 @@
     };
 
     document.getElementById('start-chat-btn').onclick = () => {
-       const peer = normalizeUserId(document.getElementById('to-user').value.trim());
+       const peer = normalizeUserId(toUserInput.value);
        if (peer === null) return alert('请输入正确的对方用户 ID');
-       if(!peer) return alert('请输入对方ID');
        if(!currentUserId) return alert('请先登录');
+       if (peer === currentUserId) return alert('Cannot start a chat with yourself');
        const sid = buildSingleSessionId(currentUserId, peer);
        showChatWindow(peer, sid);
     };
     
+    const toUserInput = document.getElementById('to-user');
+    toUserInput.addEventListener('input', () => {
+       const sanitized = sanitizeUserIdInputValue(toUserInput.value);
+       if (toUserInput.value !== sanitized) {
+         toUserInput.value = sanitized;
+       }
+    });
+    toUserInput.addEventListener('blur', () => {
+       toUserInput.value = sanitizeUserIdInputValue(toUserInput.value);
+    });
+    toUserInput.addEventListener('paste', () => {
+       setTimeout(() => {
+         toUserInput.value = sanitizeUserIdInputValue(toUserInput.value);
+       }, 0);
+    });
+
     document.getElementById('refresh-sessions-btn').onclick = loadSingleSessionList;
     document.getElementById('send-btn').onclick = sendMsg;
     document.getElementById('msg-text').onkeydown = (e) => { if(e.key==='Enter') sendMsg(); };

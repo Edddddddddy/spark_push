@@ -55,6 +55,12 @@ Config LoadConfig(const std::string& path) {
   // comet: 默认 gRPC 端口为 WebSocket 端口 + 100
   cfg.comet_grpc_port = cfg.listen_port + 100;
   cfg.job_rpc_worker_threads = 8;
+  cfg.enable_etcd = false;
+  cfg.etcd_endpoints = "http://127.0.0.1:2379";
+  cfg.etcd_prefix = "/sparkpush/services";
+  cfg.etcd_lease_ttl = 15;
+  cfg.logic_advertise_addr.clear();
+  cfg.comet_advertise_addr.clear();
 
   std::ifstream fin(path);
   if (!fin) {
@@ -119,6 +125,12 @@ Config LoadConfig(const std::string& path) {
     else if (key == "use_push_stream") cfg.use_push_stream = (value == "true" || value == "1");
     else if (key == "job_rpc_worker_threads") cfg.job_rpc_worker_threads = std::stoi(value);
     else if (key == "http_threads") cfg.http_threads = std::stoi(value);
+    else if (key == "enable_etcd") cfg.enable_etcd = (value == "true" || value == "1");
+    else if (key == "etcd_endpoints") cfg.etcd_endpoints = value;
+    else if (key == "etcd_prefix") cfg.etcd_prefix = value;
+    else if (key == "etcd_lease_ttl") cfg.etcd_lease_ttl = std::stoi(value);
+    else if (key == "logic_advertise_addr") cfg.logic_advertise_addr = value;
+    else if (key == "comet_advertise_addr") cfg.comet_advertise_addr = value;
   }
 
   return cfg;

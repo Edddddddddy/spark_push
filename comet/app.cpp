@@ -2,6 +2,7 @@
 
 #include "comet_grpc_service.h"
 #include "comet_server.h"
+#include "etcd_client.h"
 #include "logging.h"
 #include "signal_handler.h"
 
@@ -12,22 +13,41 @@
 namespace sparkpush {
 
 void RunComet(const Config& cfg) {
+  Config effective_cfg = cfg;
+  effective_cfg.logic_grpc_target = ResolveLogicGrpcTarget(cfg);
+
   EventLoop loop;
-  CometServer server(&loop, cfg);
-  server.SetThreadNum(cfg.comet_io_threads);
+  CometServer server(&loop, effective_cfg);
+  server.SetThreadNum(effective_cfg.comet_io_threads);
   server.Start();
   LogInfo("Comet server listening on port " +
-          std::to_string(cfg.listen_port));
+          std::to_string(effective_cfg.listen_port));
 
   // gRPC 服务器（用于 job 推送）
   std::string addr =
-      cfg.listen_addr + ":" + std::to_string(cfg.comet_grpc_port);
+      effective_cfg.listen_addr + ":" + std::to_string(effective_cfg.comet_grpc_port);
   grpc::ServerBuilder builder;
   CometServiceImpl grpcService(&server);
   builder.AddListeningPort(addr, grpc::InsecureServerCredentials());
   builder.RegisterService(&grpcService);
   std::unique_ptr<grpc::Server> grpcServer = builder.BuildAndStart();
   LogInfo("Comet gRPC server listening on " + addr);
+
+  auto etcd_client = CreateEtcdClient(effective_cfg);
+  std::unique_ptr<EtcdServiceRegistrar> registrar;
+  if (etcd_client) {
+    std::string advertise_addr = effective_cfg.comet_advertise_addr;
+    if (advertise_addr.empty()) {
+      advertise_addr = "comet:" + std::to_string(effective_cfg.comet_grpc_port);
+    }
+    registrar = std::make_unique<EtcdServiceRegistrar>(
+        etcd_client,
+        "comet",
+        effective_cfg.comet_id,
+        advertise_addr,
+        effective_cfg.etcd_lease_ttl);
+    registrar->Start();
+  }
 
   // 优雅关闭：收到 SIGTERM/SIGINT 后退出 EventLoop 并关闭 gRPC
   InstallSignalHandler([&loop, &grpcServer]() {
@@ -53,6 +73,9 @@ void RunComet(const Config& cfg) {
   }
   if (grpc_thread.joinable()) {
     grpc_thread.join();
+  }
+  if (registrar) {
+    registrar->Stop();
   }
   LogInfo("Comet shutdown complete");
 }
