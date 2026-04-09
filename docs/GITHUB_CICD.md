@@ -102,13 +102,20 @@ What it does:
 - log in to GHCR on the server
 - pull the new image
 - restart the release stack
+- if GHCR pull is denied, fall back to server-side source build to keep deployment available
 
 ## Release Deployment Model
 
 There are now two deployment modes:
 
 - `deploy/docker-compose.prod.yml`: source-build deployment, useful for local and manual server build
-- `deploy/docker-compose.release.yml`: image-based deployment, used by GitHub CD
+- `deploy/docker-compose.release.yml`: image-based deployment, used by GitHub CD first
+
+Current CD strategy:
+
+1. try image-based deployment first
+2. if the server cannot pull the private GHCR image, fall back to `docker-compose.prod.yml`
+3. keep production deployment available even when package permissions are not ready
 
 The release stack pulls:
 
