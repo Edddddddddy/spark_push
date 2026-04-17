@@ -2,6 +2,8 @@
 
 This project uses GitHub Actions to build one immutable image per commit and deploys release manifests to a fixed server layout.
 
+The deploy job pulls the GHCR image on the GitHub runner and streams it to the server with `docker save | gzip | ssh docker load`. The server then runs the release with `SKIP_PULL=true` and `APP_PULL_POLICY=never`, which avoids slow direct GHCR pulls from the runtime host.
+
 ## Environments
 
 | Git branch or action | GitHub Environment | Runtime environment | Default URL |
