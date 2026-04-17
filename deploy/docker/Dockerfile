@@ -1,6 +1,14 @@
 FROM ubuntu:22.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=http://security.ubuntu.com/ubuntu
+
+RUN sed -i \
+      -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+      -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" \
+      /etc/apt/sources.list \
+ && printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\n' >/etc/apt/apt.conf.d/99ci-network
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -33,6 +41,14 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 FROM ubuntu:22.04 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=http://security.ubuntu.com/ubuntu
+
+RUN sed -i \
+      -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+      -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" \
+      /etc/apt/sources.list \
+ && printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\n' >/etc/apt/apt.conf.d/99ci-network
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \

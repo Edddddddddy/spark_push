@@ -4,16 +4,72 @@ on:
   push:
     branches:
       - main
+      - develop
+      - "release/**"
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Deployment target"
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: spark-push-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  select-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_environment: ${{ steps.select.outputs.deploy_environment }}
+      github_environment: ${{ steps.select.outputs.github_environment }}
+      release_id: ${{ steps.select.outputs.release_id }}
+    steps:
+      - name: Select deployment environment
+        id: select
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            deploy_environment="${{ inputs.target_environment }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            deploy_environment="prod"
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            deploy_environment="prod"
+          elif [[ "${GITHUB_REF_NAME}" == "develop" ]]; then
+            deploy_environment="dev"
+          elif [[ "${GITHUB_REF_NAME}" == release/* ]]; then
+            deploy_environment="test"
+          else
+            echo "Unsupported ref: ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
+          case "$deploy_environment" in
+            dev) github_environment="development" ;;
+            test) github_environment="testing" ;;
+            prod) github_environment="production" ;;
+            *) echo "Unsupported target: $deploy_environment" >&2; exit 1 ;;
+          esac
+
+          release_id="$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::12}"
+          {
+            echo "deploy_environment=$deploy_environment"
+            echo "github_environment=$github_environment"
+            echo "release_id=$release_id"
+          } >> "$GITHUB_OUTPUT"
+
   build-and-push:
+    needs: select-environment
     runs-on: ubuntu-latest
     outputs:
       image_repository: ${{ steps.vars.outputs.image_repository }}
@@ -27,7 +83,7 @@ jobs:
         shell: bash
         run: |
           echo "image_repository=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "image_tag=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${{ needs.select-environment.outputs.deploy_environment }}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -46,7 +102,9 @@ jobs:
           images: ${{ steps.vars.outputs.image_repository }}
           tags: |
             type=raw,value=${{ steps.vars.outputs.image_tag }}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev-latest,enable=${{ needs.select-environment.outputs.deploy_environment == 'dev' }}
+            type=raw,value=test-latest,enable=${{ needs.select-environment.outputs.deploy_environment == 'test' }}
+            type=raw,value=latest,enable=${{ needs.select-environment.outputs.deploy_environment == 'prod' }}
             type=ref,event=tag
 
       - name: Build and push image
@@ -61,11 +119,13 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    needs: build-and-push
+    needs:
+      - select-environment
+      - build-and-push
     runs-on: ubuntu-latest
     environment:
-      name: production
-      url: http://${{ vars.DEPLOY_HOST }}/
+      name: ${{ needs.select-environment.outputs.github_environment }}
+      url: ${{ vars.PUBLIC_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -73,7 +133,7 @@ jobs:
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY || secrets.PROD_SSH_PRIVATE_KEY }}
 
       - name: Trust deploy host
         shell: bash
@@ -82,10 +142,22 @@ jobs:
           chmod 700 "$HOME/.ssh"
           ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> "$HOME/.ssh/known_hosts"
 
-      - name: Ensure remote path exists
+      - name: Prepare release path
+        id: paths
+        shell: bash
+        env:
+          APP_ROOT: ${{ vars.APP_ROOT || '/opt/apps/spark_push' }}
+          DEPLOY_ENV: ${{ needs.select-environment.outputs.deploy_environment }}
+          RELEASE_ID: ${{ needs.select-environment.outputs.release_id }}
+        run: |
+          release_path="${APP_ROOT}/${DEPLOY_ENV}/releases/${RELEASE_ID}"
+          echo "app_root=${APP_ROOT}" >> "$GITHUB_OUTPUT"
+          echo "release_path=${release_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure remote release path exists
         shell: bash
         run: |
-          ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "mkdir -p '${{ vars.DEPLOY_PATH }}'"
+          ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "mkdir -p '${{ steps.paths.outputs.release_path }}'"
 
       - name: Sync release manifests
         shell: bash
@@ -95,23 +167,25 @@ jobs:
             --exclude 'build' \
             --exclude 'logs' \
             --exclude 'deploy/.env.prod' \
-            ./ "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:${{ vars.DEPLOY_PATH }}/"
+            ./ "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:${{ steps.paths.outputs.release_path }}/"
 
       - name: Deploy on server
         shell: bash
+        env:
+          APP_ROOT: ${{ steps.paths.outputs.app_root }}
+          DEPLOY_ENV: ${{ needs.select-environment.outputs.deploy_environment }}
+          IMAGE_REPOSITORY: ${{ needs.build-and-push.outputs.image_repository }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          GHCR_USERNAME: ${{ vars.GHCR_PULL_USERNAME || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          if [ -n "${{ secrets.GHCR_PULL_TOKEN }}" ]; then
-            ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
-              cd '${{ vars.DEPLOY_PATH }}' && \
-              chmod +x deploy/scripts/release_server.sh deploy/scripts/deploy_remote.sh && \
-              APP_IMAGE_REPOSITORY='${{ needs.build-and-push.outputs.image_repository }}' \
-              APP_IMAGE_TAG='${{ needs.build-and-push.outputs.image_tag }}' \
-              GHCR_USERNAME='${{ vars.GHCR_PULL_USERNAME }}' \
-              GHCR_TOKEN='${{ secrets.GHCR_PULL_TOKEN }}' \
-              bash deploy/scripts/release_server.sh || \
-              docker compose --env-file deploy/.env.prod -f deploy/docker-compose.prod.yml up -d --build"
-          else
-            ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
-              cd '${{ vars.DEPLOY_PATH }}' && \
-              docker compose --env-file deploy/.env.prod -f deploy/docker-compose.prod.yml up -d --build"
-          fi
+          ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
+            cd '${{ steps.paths.outputs.release_path }}' && \
+            chmod +x deploy/scripts/release_server.sh deploy/scripts/deploy_remote.sh && \
+            APP_ROOT='${APP_ROOT}' \
+            DEPLOY_ENV='${DEPLOY_ENV}' \
+            APP_IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' \
+            APP_IMAGE_TAG='${IMAGE_TAG}' \
+            GHCR_USERNAME='${GHCR_USERNAME}' \
+            GHCR_TOKEN='${GHCR_TOKEN}' \
+            bash deploy/scripts/release_server.sh"
