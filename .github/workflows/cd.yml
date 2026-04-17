@@ -169,6 +169,19 @@ jobs:
             --exclude 'deploy/.env.prod' \
             ./ "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}:${{ steps.paths.outputs.release_path }}/"
 
+      - name: Load image on server
+        shell: bash
+        env:
+          IMAGE_REPOSITORY: ${{ needs.build-and-push.outputs.image_repository }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          GHCR_USERNAME: ${{ vars.GHCR_PULL_USERNAME || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          image="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+          docker pull "$image"
+          docker save "$image" | gzip -1 | ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "gunzip | docker load"
+
       - name: Deploy on server
         shell: bash
         env:
@@ -176,8 +189,6 @@ jobs:
           DEPLOY_ENV: ${{ needs.select-environment.outputs.deploy_environment }}
           IMAGE_REPOSITORY: ${{ needs.build-and-push.outputs.image_repository }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-          GHCR_USERNAME: ${{ vars.GHCR_PULL_USERNAME || github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           ssh "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" "\
             cd '${{ steps.paths.outputs.release_path }}' && \
@@ -186,6 +197,6 @@ jobs:
             DEPLOY_ENV='${DEPLOY_ENV}' \
             APP_IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' \
             APP_IMAGE_TAG='${IMAGE_TAG}' \
-            GHCR_USERNAME='${GHCR_USERNAME}' \
-            GHCR_TOKEN='${GHCR_TOKEN}' \
+            SKIP_PULL='true' \
+            APP_PULL_POLICY='never' \
             bash deploy/scripts/release_server.sh"
