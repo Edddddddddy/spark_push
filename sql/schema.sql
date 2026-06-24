@@ -1,11 +1,8 @@
--- 自动创建数据库并初始化所有表
+-- 初始化当前已选中的数据库中的所有业务表
+-- 适用于：
+-- 1) Docker MySQL 镜像通过 MYSQL_DATABASE 自动创建目标库后执行
+-- 2) 手工使用 mysql -D <database> < sql/schema.sql 导入
 -- 支持重复执行（幂等）
-DROP DATABASE IF EXISTS spark_push;
-CREATE DATABASE IF NOT EXISTS `spark_push`
-  DEFAULT CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-USE `spark_push`;
 
 -- 用户表：账户与密码（后续可扩展 profile 字段、盐值和密码哈希）
 CREATE TABLE IF NOT EXISTS `user` (

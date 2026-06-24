@@ -49,6 +49,8 @@ The deploy job pulls the GHCR image on the GitHub runner and streams it to the s
 
 `releases/<release-id>` contains the release manifests from the matching commit. `current` is updated only after `deploy/scripts/release_server.sh` starts the stack and the health check passes.
 
+`sql/schema.sql` is schema-only and should run against the database selected by `MYSQL_DATABASE` during container bootstrap, or by an explicit `mysql -D <database>` command during manual initialization. Do not hardcode environment-specific database names inside the SQL file.
+
 ## GitHub Environment settings
 
 Create three GitHub Environments: `development`, `testing`, and `production`.
